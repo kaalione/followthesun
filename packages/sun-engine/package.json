@@ -1,0 +1,17 @@
+{
+  "name": "@followthesun/sun-engine",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "suncalc": "^1.9.0"
+  },
+  "devDependencies": {
+    "@types/suncalc": "^1.9.0",
+    "typescript": "^5.7.0"
+  }
+}
