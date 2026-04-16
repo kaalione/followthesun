@@ -3,7 +3,11 @@
 import { useAppStore } from '@/store';
 
 export default function Header() {
-  const { showOnlySunny, setShowOnlySunny, isShadowEngineReady, requestLocateMe } = useAppStore();
+  const {
+    showOnlySunny, setShowOnlySunny,
+    showShadows, setShowShadows,
+    isShadowEngineReady, requestLocateMe,
+  } = useAppStore();
 
   return (
     <header className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
@@ -29,6 +33,20 @@ export default function Header() {
               <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
             </svg>
             <span className="hidden sm:inline">Nära mig</span>
+          </button>
+
+          {/* Shadow overlay toggle */}
+          <button
+            onClick={() => setShowShadows(!showShadows)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium shadow-md border transition-all ${
+              showShadows
+                ? 'bg-[var(--color-shade)] text-white border-[var(--color-shade)]'
+                : 'bg-white/90 backdrop-blur-md text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-white'
+            }`}
+            title="Visa/dölj skuggor"
+          >
+            <span>{showShadows ? '🌗' : '🌕'}</span>
+            <span className="hidden sm:inline">Skuggor</span>
           </button>
 
           {/* Sun filter */}

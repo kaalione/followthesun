@@ -23,6 +23,9 @@ const LABEL_LAYER = 'venues-labels';
 const BUILDINGS_3D_LAYER = 'buildings-3d';
 const SHADOW_SOURCE = 'shadow-polygons';
 const SHADOW_LAYER = 'shadow-overlay';
+const SUN_RAY_SOURCE = 'sun-ray';
+const SUN_RAY_LAYER = 'sun-ray-line';
+const SUN_RAY_ARROW_LAYER = 'sun-ray-arrow';
 
 function venueFeatureCollection(venues: VenueWithSunStatus[]): GeoJSON.FeatureCollection {
   return {
@@ -42,6 +45,81 @@ function venueFeatureCollection(venues: VenueWithSunStatus[]): GeoJSON.FeatureCo
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+/**
+ * Build a sun direction ray: a line from map center toward the sun,
+ * plus a shorter line showing shadow direction (opposite).
+ * The ray visually indicates where sunlight is coming FROM.
+ */
+function buildSunRayGeoJSON(
+  center: [number, number], // [lng, lat]
+  azimuth: number,          // radians, SunCalc convention (0=south, CW)
+  altitude: number,         // radians
+): GeoJSON.FeatureCollection {
+  if (altitude <= 0) return EMPTY_FC;
+
+  // SunCalc azimuth: 0=south, positive=west (CW from south)
+  // Convert to standard math: angle from east, CCW
+  // But for geographic: we need the direction the sun IS IN
+  // azimuth 0 = south, π/2 = west, π = north, -π/2 = east
+  const sunBearingRad = azimuth; // direction FROM observer TO sun
+
+  // Sun ray: FROM the center TOWARD the sun direction
+  // Length in degrees (roughly 200m at Stockholm latitude)
+  const rayLengthDeg = 0.003; // ~200m
+
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = 111320 * Math.cos((center[1] * Math.PI) / 180);
+  const ratio = metersPerDegLat / metersPerDegLng;
+
+  // Direction toward sun (from center)
+  const dxSun = Math.sin(sunBearingRad) * rayLengthDeg * ratio;
+  const dySun = Math.cos(sunBearingRad) * rayLengthDeg;
+
+  // Shadow direction (opposite of sun)
+  const shadowLen = rayLengthDeg * 0.6;
+  const dxShadow = -Math.sin(sunBearingRad) * shadowLen * ratio;
+  const dyShadow = -Math.cos(sunBearingRad) * shadowLen;
+
+  return {
+    type: 'FeatureCollection',
+    features: [
+      // Sun ray (yellow line toward sun)
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            center,
+            [center[0] + dxSun, center[1] + dySun],
+          ],
+        },
+        properties: { type: 'sun' },
+      },
+      // Shadow direction (dark line away from sun)
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            center,
+            [center[0] + dxShadow, center[1] + dyShadow],
+          ],
+        },
+        properties: { type: 'shadow' },
+      },
+      // Sun "dot" at the tip
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [center[0] + dxSun, center[1] + dySun],
+        },
+        properties: { type: 'sun-tip' },
+      },
+    ],
+  };
+}
 
 /**
  * Try multiple source names to find buildings in MapTiler tiles.
@@ -82,6 +160,7 @@ export default function SunMap() {
   const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_API_KEY || '';
   const selectedDate = useAppStore((s) => s.selectedDate);
   const showOnlySunny = useAppStore((s) => s.showOnlySunny);
+  const showShadows = useAppStore((s) => s.showShadows);
 
   // Load venues from static snapshot + optional Overpass refresh
   const { venues: rawVenues, isLoading: venuesLoading, source: venueSource }: { venues: Venue[]; isLoading: boolean; error: string | null; source: string } = useVenues();
@@ -107,10 +186,24 @@ export default function SunMap() {
     // Get sun position
     const sunPos = getSunPositionForShadow(currentDate, center.lat, center.lng);
 
-    // Update sun info text in store
-    useAppStore.getState().setSunInfoText(
-      getSunDirectionText(sunPos.azimuth, sunPos.altitude)
-    );
+    // Update sun info in store
+    const azDeg = ((sunPos.azimuth * 180) / Math.PI + 180 + 360) % 360;
+    const altDeg = Math.max(0, (sunPos.altitude * 180) / Math.PI);
+    useAppStore.getState().setSunInfoText(getSunDirectionText(sunPos.azimuth, sunPos.altitude));
+    useAppStore.getState().setSunAngles(azDeg, altDeg);
+
+    // === SUN DIRECTION RAY ===
+    if (sunPos.isAboveHorizon) {
+      const raySource = map.getSource(SUN_RAY_SOURCE) as maplibregl.GeoJSONSource | undefined;
+      if (raySource) {
+        const rayGeoJSON = buildSunRayGeoJSON(
+          [center.lng, center.lat],
+          sunPos.azimuth,
+          sunPos.altitude,
+        );
+        raySource.setData(rayGeoJSON);
+      }
+    }
 
     // Extract buildings from vector tiles
     const buildingFeatures = queryBuildingFeatures(map);
@@ -231,7 +324,56 @@ export default function SunMap() {
         firstSymbolId
       );
 
-      // 3. Update lighting
+      // 3. Sun direction ray (visual indicator of where sunlight comes from)
+      map.addSource(SUN_RAY_SOURCE, {
+        type: 'geojson',
+        data: EMPTY_FC,
+      });
+
+      // Sun ray line (golden, toward sun)
+      map.addLayer({
+        id: SUN_RAY_LAYER,
+        type: 'line',
+        source: SUN_RAY_SOURCE,
+        filter: ['==', ['get', 'type'], 'sun'],
+        paint: {
+          'line-color': '#F5A623',
+          'line-width': 4,
+          'line-opacity': 0.8,
+          'line-dasharray': [2, 2],
+        },
+      });
+
+      // Shadow direction line (dark, opposite direction)
+      map.addLayer({
+        id: SUN_RAY_ARROW_LAYER,
+        type: 'line',
+        source: SUN_RAY_SOURCE,
+        filter: ['==', ['get', 'type'], 'shadow'],
+        paint: {
+          'line-color': '#2D3748',
+          'line-width': 3,
+          'line-opacity': 0.5,
+          'line-dasharray': [1, 3],
+        },
+      });
+
+      // Sun tip circle (golden dot at end of ray)
+      map.addLayer({
+        id: 'sun-ray-tip',
+        type: 'circle',
+        source: SUN_RAY_SOURCE,
+        filter: ['==', ['get', 'type'], 'sun-tip'],
+        paint: {
+          'circle-radius': 8,
+          'circle-color': '#F5A623',
+          'circle-stroke-color': '#FFFFFF',
+          'circle-stroke-width': 2,
+          'circle-opacity': 0.9,
+        },
+      });
+
+      // 4. Update lighting
       updateMapLighting(map, useAppStore.getState().selectedDate);
 
       // 4. Add venue sources + layers
@@ -376,6 +518,17 @@ export default function SunMap() {
     if (map.getLayer(SHADE_LAYER)) map.setLayoutProperty(SHADE_LAYER, 'visibility', vis);
     if (map.getLayer(UNKNOWN_LAYER)) map.setLayoutProperty(UNKNOWN_LAYER, 'visibility', vis);
   }, [showOnlySunny]);
+
+  // Shadow overlay toggle
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    const vis = showShadows ? 'visible' : 'none';
+    if (map.getLayer(SHADOW_LAYER)) map.setLayoutProperty(SHADOW_LAYER, 'visibility', vis);
+    if (map.getLayer(SUN_RAY_LAYER)) map.setLayoutProperty(SUN_RAY_LAYER, 'visibility', vis);
+    if (map.getLayer(SUN_RAY_ARROW_LAYER)) map.setLayoutProperty(SUN_RAY_ARROW_LAYER, 'visibility', vis);
+    if (map.getLayer('sun-ray-tip')) map.setLayoutProperty('sun-ray-tip', 'visibility', vis);
+  }, [showShadows]);
 
   // Geolocation: "Near me"
   const locateMeRequested = useAppStore((s) => s.locateMeRequested);

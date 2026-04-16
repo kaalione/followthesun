@@ -14,9 +14,11 @@ interface AppState {
   selectedVenueId: string | null;
   setSelectedVenueId: (id: string | null) => void;
 
-  // Filter
+  // Filters
   showOnlySunny: boolean;
   setShowOnlySunny: (v: boolean) => void;
+  showShadows: boolean;
+  setShowShadows: (v: boolean) => void;
 
   // Map state
   isMapLoaded: boolean;
@@ -27,9 +29,12 @@ interface AppState {
   // Sun info
   sunInfoText: string;
   setSunInfoText: (text: string) => void;
+  sunAzimuthDeg: number;
+  sunAltitudeDeg: number;
+  setSunAngles: (az: number, alt: number) => void;
 
   // Geolocation
-  locateMeRequested: number; // timestamp, incremented to trigger flyTo
+  locateMeRequested: number;
   requestLocateMe: () => void;
 }
 
@@ -46,6 +51,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   showOnlySunny: false,
   setShowOnlySunny: (v) => set({ showOnlySunny: v }),
+  showShadows: true,
+  setShowShadows: (v) => set({ showShadows: v }),
 
   isMapLoaded: false,
   setMapLoaded: (loaded) => set({ isMapLoaded: loaded }),
@@ -54,6 +61,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   sunInfoText: '',
   setSunInfoText: (text) => set({ sunInfoText: text }),
+  sunAzimuthDeg: 0,
+  sunAltitudeDeg: 0,
+  setSunAngles: (az, alt) => set({ sunAzimuthDeg: az, sunAltitudeDeg: alt }),
 
   locateMeRequested: 0,
   requestLocateMe: () => set({ locateMeRequested: Date.now() }),
