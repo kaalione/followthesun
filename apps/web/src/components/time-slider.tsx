@@ -5,7 +5,7 @@ import { getSunTimes, formatTime, minutesFromMidnight, dateFromMinutes } from '@
 import { useAppStore } from '@/store';
 
 export default function TimeSlider() {
-  const { selectedDate, isLiveMode, setSelectedDate, setLiveMode } = useAppStore();
+  const { selectedDate, isLiveMode, setSelectedDate, setLiveMode, sunInfoText } = useAppStore();
   const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   const sunTimes = useMemo(() => getSunTimes(selectedDate), [selectedDate]);
@@ -104,11 +104,16 @@ export default function TimeSlider() {
             />
           </div>
 
-          {/* Sunrise / Sunset labels */}
-          <div className="flex justify-between mt-1.5">
+          {/* Sunrise / Sun direction / Sunset labels */}
+          <div className="flex justify-between items-center mt-1.5">
             <span className="text-xs text-[var(--color-text-secondary)] font-mono">
               ☀️ {formatTime(sunTimes.sunrise)}
             </span>
+            {sunInfoText && (
+              <span className="text-xs text-[var(--color-primary)] font-medium">
+                {sunInfoText}
+              </span>
+            )}
             <span className="text-xs text-[var(--color-text-secondary)] font-mono">
               🌙 {formatTime(sunTimes.sunset)}
             </span>

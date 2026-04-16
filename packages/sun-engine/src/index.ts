@@ -11,6 +11,13 @@ export {
 } from './shadowEngine';
 export type { SunPosition, Building } from './shadowEngine';
 
+// Re-export shadow projection (visual overlay)
+export {
+  projectBuildingShadows,
+  getShadowOpacity,
+  getSunDirectionText,
+} from './shadowProjection';
+
 export interface SunTimes {
   sunrise: Date;
   sunset: Date;

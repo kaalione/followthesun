@@ -8,6 +8,9 @@ import {
   getSunPositionForShadow,
   checkVenuesSunStatus,
   extractBuildingsFromFeatures,
+  projectBuildingShadows,
+  getShadowOpacity,
+  getSunDirectionText,
 } from '@followthesun/sun-engine';
 import { useVenues, type VenueWithSunStatus, type Venue } from '@followthesun/venue-data';
 import { useAppStore } from '@/store';
@@ -18,6 +21,8 @@ const SHADE_LAYER = 'venues-shade';
 const UNKNOWN_LAYER = 'venues-unknown';
 const LABEL_LAYER = 'venues-labels';
 const BUILDINGS_3D_LAYER = 'buildings-3d';
+const SHADOW_SOURCE = 'shadow-polygons';
+const SHADOW_LAYER = 'shadow-overlay';
 
 function venueFeatureCollection(venues: VenueWithSunStatus[]): GeoJSON.FeatureCollection {
   return {
@@ -36,9 +41,10 @@ function venueFeatureCollection(venues: VenueWithSunStatus[]): GeoJSON.FeatureCo
   };
 }
 
+const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
 /**
- * Try multiple source names to find the building source in MapTiler tiles.
- * MapTiler Streets v2 uses "maptiler_planet", but fallback to "openmaptiles" or others.
+ * Try multiple source names to find buildings in MapTiler tiles.
  */
 function queryBuildingFeatures(map: maplibregl.Map): any[] {
   const possibleSources = ['maptiler_planet', 'openmaptiles', 'composite'];
@@ -52,7 +58,6 @@ function queryBuildingFeatures(map: maplibregl.Map): any[] {
       // Source doesn't exist, try next
     }
   }
-  // Last resort: query rendered features for any building-looking layer
   try {
     const style = map.getStyle();
     if (style?.layers) {
@@ -78,16 +83,18 @@ export default function SunMap() {
   const selectedDate = useAppStore((s) => s.selectedDate);
   const showOnlySunny = useAppStore((s) => s.showOnlySunny);
 
-  // Load venues from Overpass (with fallback to hardcoded)
+  // Load venues from static snapshot + optional Overpass refresh
   const { venues: rawVenues, isLoading: venuesLoading, source: venueSource }: { venues: Venue[]; isLoading: boolean; error: string | null; source: string } = useVenues();
 
-  // Log venue source for debugging
   useEffect(() => {
     if (!venuesLoading) {
       console.log(`[FollowTheSun] Loaded ${rawVenues.length} venues from ${venueSource}`);
     }
   }, [venuesLoading, rawVenues.length, venueSource]);
 
+  /**
+   * Core update: compute shadow polygons + venue sun status
+   */
   const updateSunStatus = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -95,8 +102,42 @@ export default function SunMap() {
     const bounds = map.getBounds();
     const center = map.getCenter();
     const currentDate = useAppStore.getState().selectedDate;
+    const zoom = map.getZoom();
 
-    // Filter venues in viewport
+    // Get sun position
+    const sunPos = getSunPositionForShadow(currentDate, center.lat, center.lng);
+
+    // Update sun info text in store
+    useAppStore.getState().setSunInfoText(
+      getSunDirectionText(sunPos.azimuth, sunPos.altitude)
+    );
+
+    // Extract buildings from vector tiles
+    const buildingFeatures = queryBuildingFeatures(map);
+    const buildings = extractBuildingsFromFeatures(buildingFeatures);
+
+    // === SHADOW OVERLAY: project shadow polygons ===
+    if (zoom >= 13.5 && sunPos.isAboveHorizon) {
+      const shadowGeoJSON = projectBuildingShadows(buildings, sunPos, center.lat);
+
+      const shadowSource = map.getSource(SHADOW_SOURCE) as maplibregl.GeoJSONSource | undefined;
+      if (shadowSource) {
+        shadowSource.setData(shadowGeoJSON);
+      }
+
+      // Adjust shadow opacity based on sun altitude
+      if (map.getLayer(SHADOW_LAYER)) {
+        map.setPaintProperty(SHADOW_LAYER, 'fill-opacity', getShadowOpacity(sunPos.altitude));
+      }
+    } else {
+      // Too zoomed out or night — clear shadows
+      const shadowSource = map.getSource(SHADOW_SOURCE) as maplibregl.GeoJSONSource | undefined;
+      if (shadowSource) {
+        shadowSource.setData(EMPTY_FC);
+      }
+    }
+
+    // === VENUE SUN STATUS ===
     const visibleVenues = rawVenues.filter(
       (v: Venue) =>
         v.lng >= bounds.getWest() &&
@@ -105,11 +146,6 @@ export default function SunMap() {
         v.lat <= bounds.getNorth()
     );
 
-    // Extract buildings from map vector tiles
-    const buildingFeatures = queryBuildingFeatures(map);
-    const buildings = extractBuildingsFromFeatures(buildingFeatures);
-
-    // Compute sun status
     const sunStatuses = checkVenuesSunStatus(
       visibleVenues,
       buildings,
@@ -118,7 +154,6 @@ export default function SunMap() {
       center.lng,
     );
 
-    // Build full venue list with sun status
     const allVenues: VenueWithSunStatus[] = rawVenues.map((v: Venue) => ({
       ...v,
       inSun: sunStatuses.get(v.id) ?? null,
@@ -127,14 +162,13 @@ export default function SunMap() {
 
     useAppStore.getState().setVenues(allVenues);
 
-    // Update GeoJSON source on map
     const source = map.getSource(VENUE_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (source) {
       source.setData(venueFeatureCollection(allVenues));
     }
   }, [rawVenues]);
 
-  // Main map initialization
+  // ========== MAP INITIALIZATION ==========
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -154,23 +188,53 @@ export default function SunMap() {
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     mapRef.current = map;
 
-
-
     function debouncedUpdate() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => updateSunStatus(), 500);
+      debounceRef.current = setTimeout(() => updateSunStatus(), 150);
     }
 
     map.on('load', () => {
       useAppStore.getState().setMapLoaded(true);
 
-      // Add 3D buildings layer for visual depth
+      // 1. Add 3D buildings
       addBuildings3DLayer(map);
 
-      // Update lighting based on sun position
+      // 2. Add shadow overlay source + layer (BEFORE venue markers)
+      map.addSource(SHADOW_SOURCE, {
+        type: 'geojson',
+        data: EMPTY_FC,
+      });
+
+      // Find the first symbol layer to insert shadow below labels
+      const layers = map.getStyle()?.layers;
+      let firstSymbolId: string | undefined;
+      if (layers) {
+        for (const layer of layers) {
+          if (layer.type === 'symbol') {
+            firstSymbolId = layer.id;
+            break;
+          }
+        }
+      }
+
+      map.addLayer(
+        {
+          id: SHADOW_LAYER,
+          type: 'fill',
+          source: SHADOW_SOURCE,
+          paint: {
+            'fill-color': '#1a1a2e',
+            'fill-opacity': 0.4,
+            'fill-antialias': true,
+          },
+        },
+        firstSymbolId
+      );
+
+      // 3. Update lighting
       updateMapLighting(map, useAppStore.getState().selectedDate);
 
-      // Initial venue data (all unknown)
+      // 4. Add venue sources + layers
       const initialVenues: VenueWithSunStatus[] = rawVenues.map((v: Venue) => ({
         ...v,
         inSun: null,
@@ -178,13 +242,12 @@ export default function SunMap() {
       }));
       useAppStore.getState().setVenues(initialVenues);
 
-      // Add GeoJSON source
       map.addSource(VENUE_SOURCE, {
         type: 'geojson',
         data: venueFeatureCollection(initialVenues),
       });
 
-      // Sun markers — bright orange circles
+      // Sun markers — bright orange circles with glow
       map.addLayer({
         id: SUN_LAYER,
         type: 'circle',
@@ -207,10 +270,10 @@ export default function SunMap() {
         filter: ['==', ['get', 'sunState'], 'shade'],
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 5, 15, 10, 18, 14],
-          'circle-color': '#94A3B8',
+          'circle-color': '#64748B',
           'circle-stroke-color': '#FFFFFF',
           'circle-stroke-width': 1.5,
-          'circle-opacity': 0.7,
+          'circle-opacity': 0.65,
         },
       });
 
@@ -255,19 +318,11 @@ export default function SunMap() {
         map.on('click', layerId, (e) => {
           if (e.features && e.features.length > 0) {
             const id = e.features[0].properties?.id;
-            if (id) {
-              useAppStore.getState().setSelectedVenueId(id);
-            }
+            if (id) useAppStore.getState().setSelectedVenueId(id);
           }
         });
-
-        map.on('mouseenter', layerId, () => {
-          map.getCanvas().style.cursor = 'pointer';
-        });
-
-        map.on('mouseleave', layerId, () => {
-          map.getCanvas().style.cursor = '';
-        });
+        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
       }
 
       // Click elsewhere to deselect
@@ -275,21 +330,19 @@ export default function SunMap() {
         const features = map.queryRenderedFeatures(e.point, {
           layers: [SUN_LAYER, SHADE_LAYER, UNKNOWN_LAYER],
         });
-        if (features.length === 0) {
-          useAppStore.getState().setSelectedVenueId(null);
-        }
+        if (features.length === 0) useAppStore.getState().setSelectedVenueId(null);
       });
 
-      // Shadow engine is ready — mark it so the UI stops showing "loading"
+      // Shadow engine ready
       useAppStore.getState().setShadowEngineReady(true);
 
-      // Initial sun status calculation (wait briefly for tiles to load)
+      // Initial calculation after tiles load
       setTimeout(() => updateSunStatus(), 1500);
     });
 
     map.on('moveend', debouncedUpdate);
 
-    // Live mode: update time every 5 minutes
+    // Live mode: update every 5 minutes
     const interval = setInterval(() => {
       if (useAppStore.getState().isLiveMode) {
         useAppStore.setState({ selectedDate: new Date() });
@@ -304,19 +357,18 @@ export default function SunMap() {
     };
   }, [maptilerKey, rawVenues, updateSunStatus]);
 
-  // Sync selectedDate changes → re-run shadow calculation + update lighting
+  // Sync selectedDate → re-run shadows + lighting
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
 
     updateMapLighting(map, selectedDate);
 
-    // Debounce the shadow recalculation
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => updateSunStatus(), 300);
+    debounceRef.current = setTimeout(() => updateSunStatus(), 200);
   }, [selectedDate, updateSunStatus]);
 
-  // Toggle shade/unknown layers based on "Bara sol" filter
+  // "Bara sol" filter
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
@@ -325,45 +377,31 @@ export default function SunMap() {
     if (map.getLayer(UNKNOWN_LAYER)) map.setLayoutProperty(UNKNOWN_LAYER, 'visibility', vis);
   }, [showOnlySunny]);
 
-  // Geolocation: "Near me" button
+  // Geolocation: "Near me"
   const locateMeRequested = useAppStore((s) => s.locateMeRequested);
   const userMarkerRef = useRef<maplibregl.Marker | null>(null);
 
   useEffect(() => {
     if (!locateMeRequested) return;
     const map = mapRef.current;
-    if (!map) return;
-
-    if (!navigator.geolocation) {
-      console.warn('[FollowTheSun] Geolocation not supported');
-      return;
-    }
+    if (!map || !navigator.geolocation) return;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
         map.flyTo({ center: [longitude, latitude], zoom: 15, pitch: 50, duration: 1500 });
 
-        // Add/move user position marker
         if (userMarkerRef.current) {
           userMarkerRef.current.setLngLat([longitude, latitude]);
         } else {
           const el = document.createElement('div');
-          el.style.width = '16px';
-          el.style.height = '16px';
-          el.style.borderRadius = '50%';
-          el.style.backgroundColor = '#1B6CA8';
-          el.style.border = '3px solid white';
-          el.style.boxShadow = '0 0 0 3px rgba(27,108,168,0.3), 0 2px 6px rgba(0,0,0,0.3)';
-
+          el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#1B6CA8;border:3px solid white;box-shadow:0 0 0 3px rgba(27,108,168,0.3),0 2px 6px rgba(0,0,0,0.3)';
           userMarkerRef.current = new maplibregl.Marker({ element: el })
             .setLngLat([longitude, latitude])
             .addTo(map);
         }
       },
-      (err) => {
-        console.warn('[FollowTheSun] Geolocation error:', err.message);
-      },
+      (err) => console.warn('[FollowTheSun] Geolocation error:', err.message),
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }, [locateMeRequested]);
@@ -377,23 +415,17 @@ export default function SunMap() {
   );
 }
 
-/**
- * Add 3D extruded buildings for visual depth (replaces ShadeMap visual overlay)
- */
+// ========== Helper Functions ==========
+
 function addBuildings3DLayer(map: maplibregl.Map) {
-  // Find the first symbol layer to insert buildings below labels
   const layers = map.getStyle()?.layers;
   let firstSymbolId: string | undefined;
   if (layers) {
     for (const layer of layers) {
-      if (layer.type === 'symbol') {
-        firstSymbolId = layer.id;
-        break;
-      }
+      if (layer.type === 'symbol') { firstSymbolId = layer.id; break; }
     }
   }
 
-  // Find the correct source — MapTiler Streets v2 uses various source IDs
   const style = map.getStyle();
   let buildingSourceId = 'maptiler_planet';
   if (style?.sources) {
@@ -401,7 +433,6 @@ function addBuildings3DLayer(map: maplibregl.Map) {
     if (style.sources['maptiler_planet']) buildingSourceId = 'maptiler_planet';
   }
 
-  // Only add if the source exists and has building data
   try {
     map.addLayer(
       {
@@ -411,12 +442,9 @@ function addBuildings3DLayer(map: maplibregl.Map) {
         'source-layer': 'building',
         paint: {
           'fill-extrusion-color': [
-            'interpolate',
-            ['linear'],
+            'interpolate', ['linear'],
             ['coalesce', ['get', 'render_height'], ['get', 'height'], 9],
-            0, '#e8e4dc',
-            30, '#d4cfc4',
-            60, '#c0bab0',
+            0, '#e8e4dc', 30, '#d4cfc4', 60, '#c0bab0',
           ],
           'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 9],
           'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
@@ -426,35 +454,20 @@ function addBuildings3DLayer(map: maplibregl.Map) {
       firstSymbolId
     );
   } catch (err) {
-    console.warn('[FollowTheSun] Could not add 3D buildings layer:', err);
+    console.warn('[FollowTheSun] Could not add 3D buildings:', err);
   }
 }
 
-/**
- * Update map lighting to match sun position (gives realistic building shadows visually)
- */
 function updateMapLighting(map: maplibregl.Map, date: Date) {
   const sunPos = getSunPositionForShadow(date, 59.3293, 18.0686);
 
   if (!sunPos.isAboveHorizon) {
-    map.setLight({
-      color: '#b8c3cc',
-      intensity: 0.15,
-      anchor: 'viewport',
-      position: [1, 0, 80],
-    });
+    map.setLight({ color: '#b8c3cc', intensity: 0.15, anchor: 'viewport', position: [1, 0, 80] });
     return;
   }
 
-  // Convert SunCalc azimuth to MapLibre light position
-  // SunCalc: 0 = south, clockwise. MapLibre: 0 = north, clockwise
   const azDeg = ((sunPos.azimuth * 180) / Math.PI + 180) % 360;
   const altDeg = Math.max(5, (sunPos.altitude * 180) / Math.PI);
 
-  map.setLight({
-    color: '#ffe8c8',
-    intensity: 0.5,
-    anchor: 'viewport',
-    position: [1.5, azDeg, altDeg],
-  });
+  map.setLight({ color: '#ffe8c8', intensity: 0.5, anchor: 'viewport', position: [1.5, azDeg, altDeg] });
 }
