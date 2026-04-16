@@ -27,8 +27,18 @@ html, body {
 }
 
 /* MapLibre overrides */
+.maplibregl-ctrl-top-right {
+  top: 52px !important; /* push below header buttons */
+}
+
 .maplibregl-ctrl-attrib {
   font-size: 10px !important;
+  opacity: 0.6;
+}
+
+/* Hide the MapLibre logo from bottom-right to avoid confusion */
+.maplibregl-ctrl-logo {
+  display: none !important;
 }
 
 /* Time slider track gradient */

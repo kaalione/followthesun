@@ -47,9 +47,10 @@ function venueFeatureCollection(venues: VenueWithSunStatus[]): GeoJSON.FeatureCo
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
 /**
- * Build a sun direction ray: a line from map center toward the sun,
- * plus a shorter line showing shadow direction (opposite).
- * The ray visually indicates where sunlight is coming FROM.
+ * Build sun direction visualization:
+ * - A warm triangular "sunshine wedge" showing the lit area
+ * - A solid golden beam line pointing toward the sun
+ * - A sun icon point at the tip
  */
 function buildSunRayGeoJSON(
   center: [number, number], // [lng, lat]
@@ -58,62 +59,62 @@ function buildSunRayGeoJSON(
 ): GeoJSON.FeatureCollection {
   if (altitude <= 0) return EMPTY_FC;
 
-  // SunCalc azimuth: 0=south, positive=west (CW from south)
-  // Convert to standard math: angle from east, CCW
-  // But for geographic: we need the direction the sun IS IN
-  // azimuth 0 = south, π/2 = west, π = north, -π/2 = east
-  const sunBearingRad = azimuth; // direction FROM observer TO sun
+  const sunBearingRad = azimuth;
 
-  // Sun ray: FROM the center TOWARD the sun direction
-  // Length in degrees (roughly 200m at Stockholm latitude)
-  const rayLengthDeg = 0.003; // ~200m
+  // Ray length scales with zoom — use a fixed degree offset (~250m)
+  const rayLen = 0.0035;
+  const wedgeSpread = 0.25; // radians (~14 degrees) half-angle of sunshine wedge
 
   const metersPerDegLat = 111320;
   const metersPerDegLng = 111320 * Math.cos((center[1] * Math.PI) / 180);
   const ratio = metersPerDegLat / metersPerDegLng;
 
-  // Direction toward sun (from center)
-  const dxSun = Math.sin(sunBearingRad) * rayLengthDeg * ratio;
-  const dySun = Math.cos(sunBearingRad) * rayLengthDeg;
+  // Sun tip point
+  const dxSun = Math.sin(sunBearingRad) * rayLen * ratio;
+  const dySun = Math.cos(sunBearingRad) * rayLen;
+  const sunTip: [number, number] = [center[0] + dxSun, center[1] + dySun];
 
-  // Shadow direction (opposite of sun)
-  const shadowLen = rayLengthDeg * 0.6;
-  const dxShadow = -Math.sin(sunBearingRad) * shadowLen * ratio;
-  const dyShadow = -Math.cos(sunBearingRad) * shadowLen;
+  // Sunshine wedge: triangular area from center, fanning toward the sun
+  const wedgeLeft = sunBearingRad - wedgeSpread;
+  const wedgeRight = sunBearingRad + wedgeSpread;
+  const wedgeLen = rayLen * 1.2;
+
+  const leftTip: [number, number] = [
+    center[0] + Math.sin(wedgeLeft) * wedgeLen * ratio,
+    center[1] + Math.cos(wedgeLeft) * wedgeLen,
+  ];
+  const rightTip: [number, number] = [
+    center[0] + Math.sin(wedgeRight) * wedgeLen * ratio,
+    center[1] + Math.cos(wedgeRight) * wedgeLen,
+  ];
 
   return {
     type: 'FeatureCollection',
     features: [
-      // Sun ray (yellow line toward sun)
+      // Sunshine wedge (warm yellow triangle)
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[center, leftTip, rightTip, center]],
+        },
+        properties: { type: 'wedge' },
+      },
+      // Sun beam line (solid golden)
       {
         type: 'Feature',
         geometry: {
           type: 'LineString',
-          coordinates: [
-            center,
-            [center[0] + dxSun, center[1] + dySun],
-          ],
+          coordinates: [center, sunTip],
         },
-        properties: { type: 'sun' },
+        properties: { type: 'beam' },
       },
-      // Shadow direction (dark line away from sun)
-      {
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: [
-            center,
-            [center[0] + dxShadow, center[1] + dyShadow],
-          ],
-        },
-        properties: { type: 'shadow' },
-      },
-      // Sun "dot" at the tip
+      // Sun icon point at the tip
       {
         type: 'Feature',
         geometry: {
           type: 'Point',
-          coordinates: [center[0] + dxSun, center[1] + dySun],
+          coordinates: sunTip,
         },
         properties: { type: 'sun-tip' },
       },
@@ -330,48 +331,66 @@ export default function SunMap() {
         data: EMPTY_FC,
       });
 
-      // Sun ray line (golden, toward sun)
+      // Sunshine wedge (warm golden triangle showing lit area)
       map.addLayer({
         id: SUN_RAY_LAYER,
-        type: 'line',
+        type: 'fill',
         source: SUN_RAY_SOURCE,
-        filter: ['==', ['get', 'type'], 'sun'],
+        filter: ['==', ['get', 'type'], 'wedge'],
         paint: {
-          'line-color': '#F5A623',
-          'line-width': 4,
-          'line-opacity': 0.8,
-          'line-dasharray': [2, 2],
+          'fill-color': '#FFD060',
+          'fill-opacity': 0.18,
         },
       });
 
-      // Shadow direction line (dark, opposite direction)
+      // Sun beam line (solid warm line toward sun)
       map.addLayer({
         id: SUN_RAY_ARROW_LAYER,
         type: 'line',
         source: SUN_RAY_SOURCE,
-        filter: ['==', ['get', 'type'], 'shadow'],
+        filter: ['==', ['get', 'type'], 'beam'],
         paint: {
-          'line-color': '#2D3748',
-          'line-width': 3,
-          'line-opacity': 0.5,
-          'line-dasharray': [1, 3],
+          'line-color': '#F5A623',
+          'line-width': 5,
+          'line-opacity': 0.7,
+          'line-blur': 2,
         },
       });
 
-      // Sun tip circle (golden dot at end of ray)
-      map.addLayer({
-        id: 'sun-ray-tip',
-        type: 'circle',
-        source: SUN_RAY_SOURCE,
-        filter: ['==', ['get', 'type'], 'sun-tip'],
-        paint: {
-          'circle-radius': 8,
-          'circle-color': '#F5A623',
-          'circle-stroke-color': '#FFFFFF',
-          'circle-stroke-width': 2,
-          'circle-opacity': 0.9,
-        },
-      });
+      // Sun icon at the tip — load SVG image then add layer
+      const sunImg = new Image(40, 40);
+      sunImg.onload = () => {
+        if (!map.hasImage('sun-icon')) {
+          map.addImage('sun-icon', sunImg);
+        }
+        map.addLayer({
+          id: 'sun-ray-tip',
+          type: 'symbol',
+          source: SUN_RAY_SOURCE,
+          filter: ['==', ['get', 'type'], 'sun-tip'],
+          layout: {
+            'icon-image': 'sun-icon',
+            'icon-size': 0.7,
+            'icon-allow-overlap': true,
+          },
+        });
+      };
+      sunImg.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="22" fill="#F5A623"/>
+          <circle cx="50" cy="50" r="18" fill="#FFD060"/>
+          <g stroke="#F5A623" stroke-width="5" stroke-linecap="round">
+            <line x1="50" y1="8" x2="50" y2="18"/>
+            <line x1="50" y1="82" x2="50" y2="92"/>
+            <line x1="8" y1="50" x2="18" y2="50"/>
+            <line x1="82" y1="50" x2="92" y2="50"/>
+            <line x1="20" y1="20" x2="27" y2="27"/>
+            <line x1="73" y1="73" x2="80" y2="80"/>
+            <line x1="80" y1="20" x2="73" y2="27"/>
+            <line x1="27" y1="73" x2="20" y2="80"/>
+          </g>
+        </svg>`
+      );
 
       // 4. Update lighting
       updateMapLighting(map, useAppStore.getState().selectedDate);
