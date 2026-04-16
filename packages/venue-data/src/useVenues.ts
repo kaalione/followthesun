@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { fetchStockholmVenues } from './overpassFetcher';
 import type { Venue } from './types';
-import { stockholmVenues } from './venues';
 
-const CACHE_KEY = 'followthesun_venues_v2';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Static snapshot: 723 venues pre-fetched from Overpass (always available, no API call needed)
+import staticVenues from './stockholm-overpass.json';
+
+const CACHE_KEY = 'followthesun_venues_v3';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 interface VenueCache {
   venues: Venue[];
@@ -12,62 +14,55 @@ interface VenueCache {
 }
 
 export function useVenues() {
-  const [venues, setVenues] = useState<Venue[]>(stockholmVenues);
-  const [isLoading, setIsLoading] = useState(true);
+  // Start with the static snapshot immediately — no loading state, no API call
+  const [venues, setVenues] = useState<Venue[]>(staticVenues as Venue[]);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'cache' | 'api' | 'fallback'>('fallback');
+  const [source, setSource] = useState<'static' | 'cache' | 'api'>('static');
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadVenues() {
-      // 1. Check localStorage cache
+    async function refreshVenues() {
+      // 1. Check localStorage for a fresher copy
       try {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           const parsed: VenueCache = JSON.parse(cached);
-          if (Date.now() - parsed.fetchedAt < CACHE_TTL_MS && parsed.venues.length > 10) {
+          if (Date.now() - parsed.fetchedAt < CACHE_TTL_MS && parsed.venues.length > 100) {
             if (!cancelled) {
               setVenues(parsed.venues);
               setSource('cache');
-              setIsLoading(false);
             }
-            return;
+            return; // Cache is fresh enough
           }
         }
       } catch {
         // Ignore cache errors
       }
 
-      // 2. Fetch from Overpass API
+      // 2. Try refreshing from Overpass in the background (best-effort)
       try {
         const freshVenues = await fetchStockholmVenues();
         if (cancelled) return;
 
-        if (freshVenues.length > 10) {
+        if (freshVenues.length > 100) {
           setVenues(freshVenues);
           setSource('api');
           localStorage.setItem(
             CACHE_KEY,
             JSON.stringify({ venues: freshVenues, fetchedAt: Date.now() } satisfies VenueCache)
           );
-        } else {
-          throw new Error('Too few venues returned');
         }
+        // If <100 venues came back, silently keep static data
       } catch (err) {
         if (cancelled) return;
-        console.warn('Overpass API failed, using fallback:', err);
-        setError('Kunde inte hämta färsk venue-data. Visar sparad data.');
-        setSource('fallback');
-        // Keep fallback venues
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        // Overpass failed — totally fine, we already have 723 static venues
+        console.info('[FollowTheSun] Overpass refresh skipped (static data is current):', (err as Error).message);
       }
     }
 
-    loadVenues();
+    refreshVenues();
     return () => { cancelled = true; };
   }, []);
 

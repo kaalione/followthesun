@@ -3,7 +3,7 @@
 import { useAppStore } from '@/store';
 
 export default function Header() {
-  const { showOnlySunny, setShowOnlySunny, isShadowEngineReady } = useAppStore();
+  const { showOnlySunny, setShowOnlySunny, isShadowEngineReady, requestLocateMe } = useAppStore();
 
   return (
     <header className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
@@ -16,8 +16,22 @@ export default function Header() {
           </h1>
         </div>
 
-        {/* Filter */}
+        {/* Actions */}
         <div className="pointer-events-auto flex items-center gap-2">
+          {/* Locate me */}
+          <button
+            onClick={requestLocateMe}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium shadow-md border bg-white/90 backdrop-blur-md text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-white transition-all"
+            title="Hitta mig"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
+            <span className="hidden sm:inline">Nära mig</span>
+          </button>
+
+          {/* Sun filter */}
           <button
             onClick={() => setShowOnlySunny(!showOnlySunny)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium shadow-md border transition-all ${

@@ -23,6 +23,10 @@ interface AppState {
   setMapLoaded: (loaded: boolean) => void;
   isShadowEngineReady: boolean;
   setShadowEngineReady: (ready: boolean) => void;
+
+  // Geolocation
+  locateMeRequested: number; // timestamp, incremented to trigger flyTo
+  requestLocateMe: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -43,4 +47,7 @@ export const useAppStore = create<AppState>((set) => ({
   setMapLoaded: (loaded) => set({ isMapLoaded: loaded }),
   isShadowEngineReady: false,
   setShadowEngineReady: (ready) => set({ isShadowEngineReady: ready }),
+
+  locateMeRequested: 0,
+  requestLocateMe: () => set({ locateMeRequested: Date.now() }),
 }));

@@ -5,9 +5,11 @@ export const STOCKHOLM_CENTER = {
 
 export const MAP_CONFIG = {
   initialCenter: [STOCKHOLM_CENTER.lng, STOCKHOLM_CENTER.lat] as [number, number],
-  initialZoom: 13,
+  initialZoom: 14,
   minZoom: 11,
   maxZoom: 19,
+  initialPitch: 45,
+  maxPitch: 60,
   maxBounds: [
     [17.75, 59.20] as [number, number],
     [18.40, 59.45] as [number, number],

@@ -146,6 +146,9 @@ export default function SunMap() {
       minZoom: MAP_CONFIG.minZoom,
       maxZoom: MAP_CONFIG.maxZoom,
       maxBounds: MAP_CONFIG.maxBounds,
+      pitch: MAP_CONFIG.initialPitch,
+      maxPitch: MAP_CONFIG.maxPitch,
+      touchPitch: true,
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -321,6 +324,49 @@ export default function SunMap() {
     if (map.getLayer(SHADE_LAYER)) map.setLayoutProperty(SHADE_LAYER, 'visibility', vis);
     if (map.getLayer(UNKNOWN_LAYER)) map.setLayoutProperty(UNKNOWN_LAYER, 'visibility', vis);
   }, [showOnlySunny]);
+
+  // Geolocation: "Near me" button
+  const locateMeRequested = useAppStore((s) => s.locateMeRequested);
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null);
+
+  useEffect(() => {
+    if (!locateMeRequested) return;
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!navigator.geolocation) {
+      console.warn('[FollowTheSun] Geolocation not supported');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        map.flyTo({ center: [longitude, latitude], zoom: 15, pitch: 50, duration: 1500 });
+
+        // Add/move user position marker
+        if (userMarkerRef.current) {
+          userMarkerRef.current.setLngLat([longitude, latitude]);
+        } else {
+          const el = document.createElement('div');
+          el.style.width = '16px';
+          el.style.height = '16px';
+          el.style.borderRadius = '50%';
+          el.style.backgroundColor = '#1B6CA8';
+          el.style.border = '3px solid white';
+          el.style.boxShadow = '0 0 0 3px rgba(27,108,168,0.3), 0 2px 6px rgba(0,0,0,0.3)';
+
+          userMarkerRef.current = new maplibregl.Marker({ element: el })
+            .setLngLat([longitude, latitude])
+            .addTo(map);
+        }
+      },
+      (err) => {
+        console.warn('[FollowTheSun] Geolocation error:', err.message);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, [locateMeRequested]);
 
   return (
     <div
