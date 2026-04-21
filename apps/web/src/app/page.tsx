@@ -16,7 +16,7 @@ const SunMap = dynamic(() => import('@/components/sun-map'), {
 
 const Header = dynamic(() => import('@/components/header'), { ssr: false });
 const TimeSlider = dynamic(() => import('@/components/time-slider'), { ssr: false });
-const VenueSheet = dynamic(() => import('@/components/venue-sheet'), { ssr: false });
+const VenueDetail = dynamic(() => import('@/components/venue-detail'), { ssr: false });
 const NightOverlay = dynamic(() => import('@/components/night-overlay'), { ssr: false });
 
 export default function HomePage() {
@@ -26,7 +26,7 @@ export default function HomePage() {
       <Header />
       <NightOverlay />
       <TimeSlider />
-      <VenueSheet />
+      <VenueDetail />
     </main>
   );
 }
