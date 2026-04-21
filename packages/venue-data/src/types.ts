@@ -16,6 +16,14 @@ export const VenueSchema = z.object({
   cuisine: z.string().optional(),
   phone: z.string().optional(),
   sunHoursNote: z.string().optional(),
+
+  // Google Places enrichment (optional — populated by enrichment script)
+  googlePlaceId: z.string().optional(),
+  googleRating: z.number().optional(),
+  googleRatingCount: z.number().optional(),
+  googlePriceLevel: z.number().optional(),
+  googlePhotos: z.array(z.string()).optional(),
+  googleMapsUrl: z.string().optional(),
 });
 
 export type Venue = z.infer<typeof VenueSchema>;
